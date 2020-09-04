@@ -1,0 +1,182 @@
+---
+title: "Bayesian estimation of allele frequency when genotypes are fully observed"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cowplot)
+```
+
+We are going to assume that we have a site with two alleles: $C$ and $T$.
+We do not know the frequency of the $T$ allele, $p_T$.  To estimate it
+as a Bayesian, we start with a prior distribution.  You can play with the
+values of $\alpha_T$ and $\alpha_C$ here and see how it changes the shape of the
+beta prior distribution.
+
+## Assume prior parameters, $\alpha_T$ and $\alpha_C$
+
+```{r, echo=FALSE}
+inputPanel(
+  numericInput(
+    "alpha_1", 
+    label = "alpha_T",
+    min = 0.00, 
+    max = 100, 
+    value = 0.5,
+    step = 0.1
+  ),
+  numericInput(
+    "alpha_2", 
+    label = "alpha_C",
+    min = 0.00, 
+    max = 100, 
+    value = 0.5,
+    step = 0.1
+  )
+)
+```
+
+### Here is what the prior distribution looks like:
+
+```{r, echo=FALSE, out.height=100}
+renderPlot({
+  ggplot() +
+    xlim(0, 1) +
+    geom_function(
+      fun = dbeta,
+      args = list(
+        shape1 = input$alpha_1,
+        shape2 = input$alpha_2
+      ),
+      n = 1000
+    )
+  }, 
+  height = 150 
+)
+```
+
+
+## Set a true allele frequency and simulate some genotypes
+
+We want to estimate the allele freqeuncy from some simulated data.  To
+do that, we need to set the true value of $p_T$ and simulate a sample
+of genotypes (assuming independence of the two allelic types in an indivdual---essentially
+saying we expect Hardy-Weinberg equilibrium) from a population with allele frequency $p_T$. 
+Then we pretend we don't actually know $p_T$ and we use the sample to estimate it
+by computing the _posterior distribution_ for $p_T$. Recall that the posterior for $p_T$
+is a beta distribution: 
+$$
+p_T \sim \mathrm{Beta}(\alpha_T + \#T, \alpha_C + \#C)
+$$
+
+Set $p_T$ and $n$ (the diploid sample size) and hit `Simulate new genotypes` to
+simulate a new sample.  The posterior distribution will be computed for each new
+sample. (The true value of $p_T$ is at the red vertical line).
+
+Explore what happens when you change the prior.
+```{r, echo=FALSE}
+inputPanel(
+  numericInput(
+    "p_T", 
+    label = "p_T",
+    min = 0.00, 
+    max = 1.0, 
+    value = 0.3,
+    step = 0.01
+  ),
+  numericInput(
+    "n", 
+    label = "n",
+    min = 1, 
+    max = 200, 
+    value = 20,
+    step = 1
+  ),
+  actionButton(
+    "sim_new", 
+    "Simulate new genotypes"
+  )
+)
+
+# simulate new dataset 
+genotypes <- eventReactive(
+  input$sim_new,
+  {
+    max_in_row <- 20
+    tibble(
+      g012 = sample(
+        x = 2:0,
+        size = input$n,
+        prob = c(
+          input$p_T^2,
+          2 * input$p_T * (1 - input$p_T), 
+          (1 - input$p_T) ^ 2
+        ),
+        replace = TRUE
+      )
+    ) %>%
+      arrange(g012) %>%
+      mutate(idx = (1:n()) - 1) %>%
+      mutate(
+        geno = case_when(
+           g012== 2 ~ "TT",
+          g012 == 1 ~ "CT",
+          g012 == 0 ~ "CC"
+        ),
+        ypos = -floor(idx / max_in_row),
+        xpos = idx %% max_in_row
+      )
+      
+  }
+)
+
+renderPlot({
+  
+  ynum <- max(n_distinct(genotypes()$ypos) - 1, 1)
+  ylo <- min(genotypes()$ypos) - 1.0
+  yhi <- max(genotypes()$ypos) + 0.2 / ynum
+  
+  geno_plot <- ggplot(genotypes(), aes(x = xpos)) +
+    geom_text(aes(label = geno, colour = geno, y = ypos)) +
+    ylim(ylo, yhi) +
+    theme_void() +
+    theme(
+      legend.position = "none"
+    ) +
+    scale_colour_manual(
+      values = c(
+        CC = "blue",
+        CT = "violet",
+        TT = "red"
+      )
+    ) +
+    ggtitle("Sample of Genotypes:")
+  
+  numT <- sum(genotypes()$g012)
+  numC <- nrow(genotypes()) * 2 - numT
+  
+  post_freq_plot <- ggplot() +
+    geom_function(
+      fun = dbeta,
+      args = list(
+        shape1 = numT + input$alpha_1,
+        shape2 = numC + input$alpha_2
+      )
+    ) +
+    xlim(0,1) +
+    xlab("p_T") +
+    ylab("Posterior Density") +
+    geom_vline(xintercept = input$p_T, colour = "red")
+  
+  cowplot::plot_grid(
+    geno_plot,
+    post_freq_plot,
+    nrow = 1,
+    rel_widths = c(0.65, 0.35)
+  )
+})
+```
+
