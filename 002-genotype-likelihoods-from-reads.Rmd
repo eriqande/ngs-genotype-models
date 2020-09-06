@@ -1,0 +1,321 @@
+---
+title: "Calculating genotype likelihoods from read depths and base quality scores"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cowplot)
+source("R/geno_likelihoods.R")
+```
+
+In the brave new world of next generation sequencing, we may not be able to
+observe the genotype fully and accurately.  Instead, from each individual we
+get some number (possibly 0) of reads that cover the site we are interested
+in.  If a lot of those reads have a $T$ at the site, and few of them have a $C$
+at the site, it is likely the individual is $TT$.  If roughly the same number
+of reads have $C$'s and $T$'s it is likely the individual is $CT$, and so on.
+However, it is a little more complex, because we naturally would want to
+give higher weight to reads with higher quality scores. Making use of this
+read information requires a model by which we can compute the _likelihood_ of
+the individual's genotype given the read data.
+
+This notebook has some simple exercises to familiarize the reader with
+how genotype likelihoods behave.
+
+## Assume prior parameters, $\alpha_T$ and $\alpha_C$
+
+```{r, echo=FALSE}
+inputPanel(
+  numericInput(
+    "alpha_1", 
+    label = "alpha_T",
+    min = 0.00, 
+    max = 100, 
+    value = 0.5,
+    step = 0.1
+  ),
+  numericInput(
+    "alpha_2", 
+    label = "alpha_C",
+    min = 0.00, 
+    max = 100, 
+    value = 0.5,
+    step = 0.1
+  )
+)
+```
+
+### Here is what the prior distribution looks like:
+
+```{r, echo=FALSE, out.height=100}
+renderPlot({
+  ggplot() +
+    xlim(0, 1) +
+    geom_function(
+      fun = dbeta,
+      args = list(
+        shape1 = input$alpha_1,
+        shape2 = input$alpha_2
+      ),
+      n = 1000
+    )
+  }, 
+  height = 150 
+)
+```
+
+
+
+## Set a true allele frequency and simulate some genotypes
+
+Just like in `001-allele-freq-estimation` we are going to simulate
+a sample of genotypes.  But here, those genotypes will not be observed---they
+are _latent variables_. What we get to observe are the read depths, and we
+will simulate those to have such data to play with.
+
+Set $p_T$ and $n$, as before, and simulate the latent genotypes by
+pressing `Simulate new genotypes`. 
+
+Then, hit
+`Simulate reads` to simulate the observed read information. You can set the
+average read depth per individual, and you change how much read depth
+varies between individuals. `R.D. "variability" across indivs` = 0 means not much variation in
+read depth between individuals; 1 means quite a lot of
+variation in read depth between individuals.
+
+```{r, echo=FALSE}
+inputPanel(
+  numericInput(
+    "p_T", 
+    label = "p_T",
+    min = 0.00, 
+    max = 1.0, 
+    value = 0.3,
+    step = 0.01
+  ),
+  numericInput(
+    "n", 
+    label = "n",
+    min = 1, 
+    max = 200, 
+    value = 20,
+    step = 1
+  ),
+  actionButton(
+    "sim_new", 
+    "Simulate new genotypes"
+  )
+)
+
+inputPanel(
+  numericInput(
+    "ave_rd",
+    label ="Average per-indiv read depth",
+    min = 0.0,
+    max = 50,
+    value = 5,
+    step = 1
+  ),
+  numericInput(
+    "disp",
+    label = "R.D. \"variability\" across indivs",
+    min = 0,
+    max = 1,
+    value = 0.0,
+    step = 0.05
+  ),
+  sliderInput(
+    "phredQ_range", 
+    label = "Range of PHRED quality scores",
+    min = 0, 
+    max = 40,
+    value = c(20,40)),
+  actionButton(
+    "sim_new_rd", 
+    "Simulate new reads"
+  )
+)
+
+
+# simulate new dataset of genotypes
+genotypes <- eventReactive(
+  input$sim_new,
+  {
+    max_in_row <- 20
+    genos <- tibble(
+      g012 = sample(
+        x = 2:0,
+        size = input$n,
+        prob = c(
+          input$p_T^2,
+          2 * input$p_T * (1 - input$p_T), 
+          (1 - input$p_T) ^ 2
+        ),
+        replace = TRUE
+      )
+    ) %>%
+      arrange(g012) %>%
+      mutate(idx = (1:n()) - 1) %>%
+      mutate(
+        geno = case_when(
+           g012== 2 ~ "TT",
+          g012 == 1 ~ "CT",
+          g012 == 0 ~ "CC"
+        ),
+        ypos = -floor(idx / max_in_row),
+        xpos = idx %% max_in_row
+      )
+    genos
+      
+  }
+)
+
+# simulate a new data set of read depths
+reads_and_quals <- eventReactive(
+  input$sim_new_rd,
+  {
+    genos <- genotypes() %>%
+      ungroup()
+    reads_and_quals <- genos %>%
+      mutate(
+        tot_rd = rnbinom(
+          n(), 
+          mu = input$ave_rd,
+          size = 1/input$disp
+        ),
+        alle_list = str_split(geno, ""),
+        sampled_allele = map2(
+          .x = alle_list,
+          .y = tot_rd,
+          .f = function(x, y) sample(x, size = y, replace = TRUE)
+        )
+      ) %>%
+      select(-alle_list) %>%
+      unnest(sampled_allele) %>%
+      mutate(
+        phredQ = sample(
+          x = input$phredQ_range[1]:input$phredQ_range[2], 
+          size = n(),
+          replace = TRUE
+        ),
+        seq_err_prob = 10 ^ -(phredQ/10),
+        sequenced_allele = case_when(
+          runif(n()) > seq_err_prob ~ sampled_allele,
+          sampled_allele == "C" ~ "T",
+          sampled_allele == "T" ~ "C"
+        )
+      )
+    reads_and_quals
+  }
+)
+
+
+renderPlot(
+  {
+    
+    # get a summary of the read depths if they are available
+    rq <- reads_and_quals() 
+    genos <- genotypes()
+    
+    # and compute the genotype likelihoods as well
+    genolikes <- geno_likelihoods(rq, genos)
+    # and set, here, some values for their positions.
+    bot <- 0.8  # distance below the ypos
+    top <- 0.3  # distance below baseline
+    w <- 0.23   # width of each bar
+    full_h <- bot - top  # full height of a bar of likelihood 1
+    genolikes2 <- genolikes %>%
+      mutate(
+        xfl = xpos - 1.5 * w,  # x far left
+        xfr = xpos + 1.5 * w,   # x far right
+        ybot = ypos - bot,
+      )
+    
+    count_sep = 0.06
+    rd_summ <- rq %>%
+      group_by(idx, sequenced_allele) %>%
+      tally() %>%
+      ungroup() %>%
+      complete(
+        idx = unique(genos$idx),
+        sequenced_allele = c("C", "T"),
+        fill = list(n = 0L)
+      ) %>%
+      left_join(
+        genos %>% 
+          select(idx, xpos, ypos) %>%
+          distinct(),
+        by = "idx"
+      ) %>%
+      mutate(
+        idx = as.integer(idx),
+        sequenced_allele = as.character(sequenced_allele)
+      ) %>%
+      mutate(
+        ypos = case_when(
+          sequenced_allele == "C" ~ ypos - count_sep,
+          TRUE ~ ypos - count_sep * 2
+        )
+      )
+    
+    ynum <- max(n_distinct(genotypes()$ypos) - 1, 1)
+    ylo <- min(genotypes()$ypos) - 1.0
+    yhi <- max(genotypes()$ypos) + 0.2 / ynum
+    
+    geno_plot <- ggplot(genotypes(), aes(x = xpos)) +
+      geom_text(aes(label = geno, colour = geno, y = ypos)) +
+      geom_text(aes(label = idx + 1, y = ypos + 0.08), size = 2.5) +
+      geom_text(
+        data = rd_summ,
+        mapping = aes(label = n, y = ypos, colour = sequenced_allele)) +
+      geom_segment(
+        data = genolikes2,
+        aes(x = xfl, xend = xfr, y = ybot, yend = ybot),
+        colour = "black"
+      ) +
+      ylim(ylo, yhi) +
+      theme_void() +
+      theme(
+        legend.position = "none"
+      ) +
+      scale_colour_manual(
+        values = c(
+          CC = "blue",
+          CT = "violet",
+          TT = "red",
+          C = "blue",
+          T = "red"
+        )
+      ) +
+      ggtitle("Sample of Genotypes:")
+    
+    numT <- sum(genotypes()$g012)
+    numC <- nrow(genotypes()) * 2 - numT
+    
+    post_freq_plot <- ggplot() +
+      geom_function(
+        fun = dbeta,
+        args = list(
+          shape1 = numT + input$alpha_1,
+          shape2 = numC + input$alpha_2
+        )
+      ) +
+      xlim(0,1) +
+      xlab("p_T") +
+      ylab("Posterior Density") +
+      geom_vline(xintercept = input$p_T, colour = "red")
+    
+    cowplot::plot_grid(
+      geno_plot,
+      post_freq_plot,
+      nrow = 1,
+      rel_widths = c(0.65, 0.35)
+    )
+  },
+  height = 600
+)
+```
+
