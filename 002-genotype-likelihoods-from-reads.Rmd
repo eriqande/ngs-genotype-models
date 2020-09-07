@@ -1,5 +1,5 @@
 ---
-title: "Calculating genotype likelihoods from read depths and base quality scores"
+title: "Calculating genotype likelihoods and posteriors from read depths and base quality scores"
 output: html_document
 runtime: shiny
 ---
@@ -8,7 +8,7 @@ runtime: shiny
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(cowplot)
-source("R/geno_likelihoods.R")
+dump <- lapply(dir("R", pattern = "*.R", full.names = TRUE), function(f) source(f))
 ```
 
 In the brave new world of next generation sequencing, we may not be able to
@@ -23,10 +23,14 @@ read information requires a model by which we can compute the _likelihood_ of
 the individual's genotype given the read data.
 
 This notebook has some simple exercises to familiarize the reader with
-how genotype likelihoods behave.
+how genotype likelihoods (and genotype posteriors) behave.
+
+We adopt the SAMtools genotyping error model for two possible alleles.
+Most of the other genotyping error models are similar.
 
 ## Assume prior parameters, $\alpha_T$ and $\alpha_C$
 
+We start, as before, with a prior for allele frequency.
 ```{r, echo=FALSE}
 inputPanel(
   numericInput(
@@ -60,7 +64,7 @@ renderPlot({
         shape1 = input$alpha_1,
         shape2 = input$alpha_2
       ),
-      n = 1000
+      n = 5000
     )
   }, 
   height = 150 
@@ -69,7 +73,7 @@ renderPlot({
 
 
 
-## Set a true allele frequency and simulate some genotypes
+## Set a true allele frequency, simulate some genotypes, simulate reads from those genotypes, and witness the genotype likelihoods
 
 Just like in `001-allele-freq-estimation` we are going to simulate
 a sample of genotypes.  But here, those genotypes will not be observed---they
@@ -101,12 +105,13 @@ inputPanel(
     label = "n",
     min = 1, 
     max = 200, 
-    value = 20,
+    value = 60,
     step = 1
   ),
   actionButton(
     "sim_new", 
-    "Simulate new genotypes"
+    "Simulate new genotypes",
+    class = "btn-warning"
   )
 )
 
@@ -116,7 +121,7 @@ inputPanel(
     label ="Average per-indiv read depth",
     min = 0.0,
     max = 50,
-    value = 5,
+    value = 4,
     step = 1
   ),
   numericInput(
@@ -133,9 +138,16 @@ inputPanel(
     min = 0, 
     max = 40,
     value = c(20,40)),
+  sliderInput(
+    "phredQ_depart", 
+    label = "Range of PHRED reality departure",
+    min = -20, 
+    max = 10,
+    value = c(-1,1)),
   actionButton(
     "sim_new_rd", 
-    "Simulate new reads"
+    "Simulate new reads",
+    class = "btn-warning"
   )
 )
 
@@ -201,9 +213,16 @@ reads_and_quals <- eventReactive(
           size = n(),
           replace = TRUE
         ),
+        phredQreal = phredQ + sample(
+          x = input$phredQ_depart[1]:input$phredQ_depart[2], 
+          size = n(),
+          replace = TRUE
+        ),
+        phredQreal = ifelse(phredQreal < 0, 0, phredQreal),  # make sure none are less than 0
         seq_err_prob = 10 ^ -(phredQ/10),
+        true_err_prob = 10 ^ -(phredQreal/10),
         sequenced_allele = case_when(
-          runif(n()) > seq_err_prob ~ sampled_allele,
+          runif(n()) > true_err_prob ~ sampled_allele,
           sampled_allele == "C" ~ "T",
           sampled_allele == "T" ~ "C"
         )
@@ -212,105 +231,20 @@ reads_and_quals <- eventReactive(
   }
 )
 
-
 renderPlot(
   {
     
     # get a summary of the read depths if they are available
     rq <- reads_and_quals() 
     genos <- genotypes()
-    
-    # and compute the genotype likelihoods as well
     genolikes <- geno_likelihoods(rq, genos)
-    # and set, here, some values for their positions.
-    bot <- 0.8  # distance below the ypos
-    top <- 0.3  # distance below baseline
-    w <- 0.23   # width of each bar
-    full_h <- bot - top  # full height of a bar of likelihood 1
-    genolikes2 <- genolikes %>%
-      mutate(
-        xfl = xpos - 1.5 * w,  # x far left
-        xfr = xpos + 1.5 * w,   # x far right
-        ybot = ypos - bot,
-      )
     
-    count_sep = 0.06
-    rd_summ <- rq %>%
-      group_by(idx, sequenced_allele) %>%
-      tally() %>%
-      ungroup() %>%
-      complete(
-        idx = unique(genos$idx),
-        sequenced_allele = c("C", "T"),
-        fill = list(n = 0L)
-      ) %>%
-      left_join(
-        genos %>% 
-          select(idx, xpos, ypos) %>%
-          distinct(),
-        by = "idx"
-      ) %>%
-      mutate(
-        idx = as.integer(idx),
-        sequenced_allele = as.character(sequenced_allele)
-      ) %>%
-      mutate(
-        ypos = case_when(
-          sequenced_allele == "C" ~ ypos - count_sep,
-          TRUE ~ ypos - count_sep * 2
-        )
-      )
     
-    ynum <- max(n_distinct(genotypes()$ypos) - 1, 1)
-    ylo <- min(genotypes()$ypos) - 1.0
-    yhi <- max(genotypes()$ypos) + 0.2 / ynum
-    
-    geno_plot <- ggplot(genotypes(), aes(x = xpos)) +
-      geom_text(aes(label = geno, colour = geno, y = ypos)) +
-      geom_text(aes(label = idx + 1, y = ypos + 0.08), size = 2.5) +
-      geom_text(
-        data = rd_summ,
-        mapping = aes(label = n, y = ypos, colour = sequenced_allele)) +
-      geom_segment(
-        data = genolikes2,
-        aes(x = xfl, xend = xfr, y = ybot, yend = ybot),
-        colour = "black"
-      ) +
-      ylim(ylo, yhi) +
-      theme_void() +
-      theme(
-        legend.position = "none"
-      ) +
-      scale_colour_manual(
-        values = c(
-          CC = "blue",
-          CT = "violet",
-          TT = "red",
-          C = "blue",
-          T = "red"
-        )
-      ) +
-      ggtitle("Sample of Genotypes:")
-    
-    numT <- sum(genotypes()$g012)
-    numC <- nrow(genotypes()) * 2 - numT
-    
-    post_freq_plot <- ggplot() +
-      geom_function(
-        fun = dbeta,
-        args = list(
-          shape1 = numT + input$alpha_1,
-          shape2 = numC + input$alpha_2
-        )
-      ) +
-      xlim(0,1) +
-      xlab("p_T") +
-      ylab("Posterior Density") +
-      geom_vline(xintercept = input$p_T, colour = "red")
+    pwl <- plot_with_likelihoods(input, genos, rq, genolikes)
     
     cowplot::plot_grid(
-      geno_plot,
-      post_freq_plot,
+      pwl$geno_plot,
+      pwl$post_freq_plot,
       nrow = 1,
       rel_widths = c(0.65, 0.35)
     )
@@ -319,3 +253,230 @@ renderPlot(
 )
 ```
 
+### Table of reads and quality scores
+
+```{r, echo=FALSE}
+ DT::renderDataTable(DT::datatable({
+    rq <- reads_and_quals()
+    
+    rq %>%
+      rename(
+        true_geno = geno,
+        tot_read_depth = tot_rd,
+        seqed_allele = sequenced_allele,
+        phredQ_seq = phredQ,
+        phredQ_true = phredQreal
+      ) %>%
+      mutate(
+        indiv = idx + 1,
+        seq_err_prob = sprintf("%.7f", seq_err_prob),
+        true_err_prob = sprintf("%.7f", true_err_prob)
+      ) %>%
+      group_by(idx) %>%
+      mutate(read_num = 1:n()) %>%
+      ungroup() %>%
+      select(
+        indiv,
+        true_geno,
+        #tot_read_depth,
+        read_num,
+        sampled_allele,
+        seqed_allele,
+        phredQ_seq,
+        phredQ_true,
+        seq_err_prob,
+        true_err_prob
+      )
+  }))
+```
+
+
+## Compute and display the posterior probability of each genotype, report the maximum _a-posteriori_ genotype, and plot the sample from the posterior distribution of the allele frequencies.
+
+```{r, echo=FALSE}
+inputPanel(
+ sliderInput(
+    "burn_sweeps", 
+    label = "burn_in (lo-value) and total sweeps (hi-value)",
+    min = 0, 
+    max = 5000,
+    step = 100,
+    value = c(100,1200)),
+  actionButton(
+    "calc_posts", 
+    "Calculate Posteriors with MCMC",
+    class = "btn-warning"
+  )
+)
+
+# compute posteriors
+posterior_sample <- eventReactive(
+  input$calc_posts,
+  {
+    # get a summary of the read depths if they are available
+    rq <- reads_and_quals() 
+    genos <- genotypes()
+    genolikes <- geno_likelihoods(rq, genos)
+    
+    compute_posteriors_mcmc(
+      input, 
+      genos, 
+      rq, 
+      genolikes
+    )
+    
+  }
+)
+
+renderPlot(
+  {
+    
+    # get a summary of the read depths if they are available
+    rq <- reads_and_quals() 
+    genos <- genotypes()
+    genolikes <- geno_likelihoods(rq, genos)
+    post_sample <- posterior_sample()
+    
+    
+    pwl <- plot_with_likelihoods(input, genos, rq, genolikes)
+    
+    
+    # save the outputs for future development, etc,
+    genolikes2 <- pwl$genolikes2
+    
+    # add geno posteriors to the genolikes2
+    genolikes3 <- genolikes2 %>%
+      left_join(post_sample$GP, by = c("idx", "hyp_geno"))
+    
+    # make a data frame that has the max likelihood and max posterior
+    # genotype calls.
+    max_like_genos_count <- genolikes3 %>%
+      group_by(idx) %>%
+      mutate(
+        no_data = ifelse(all(near(scaled_likelihood, 1/3)), TRUE, FALSE)
+      ) %>%
+      arrange(idx, desc(scaled_likelihood)) %>%
+      slice(1) %>%
+      ungroup() %>%
+      mutate(inferred_genotype = ifelse(no_data, NA, hyp_geno)) %>%
+      count(geno, inferred_genotype) %>%
+      mutate(true_genotype = factor(geno, levels = c("TT", "CT", "CC")))
+    
+    max_post_genos <- genolikes3 %>%
+      group_by(idx) %>%
+      arrange(idx, desc(geno_posterior)) %>%
+      slice(1) %>%
+      ungroup() %>%
+      mutate(inferred_genotype = hyp_geno) %>%
+      select(idx, geno, inferred_genotype)
+    
+    max_post_genos_count <- max_post_genos %>%
+      count(geno, inferred_genotype) %>%
+      mutate(true_genotype = factor(geno, levels = c("TT", "CT", "CC")))
+    
+    genolikes4 <- genolikes3 %>%
+      left_join(max_post_genos %>% select(idx, inferred_genotype), by = "idx")
+      
+    
+    max_like_genos_plot <- ggplot(max_like_genos_count, aes(x = inferred_genotype, y = true_genotype)) +
+      geom_text(aes(label = n)) +
+      theme_bw() +
+      ggtitle("Maximum likelihood genotypes (summary):")
+    
+    max_post_genos_plot <- ggplot(max_post_genos_count, aes(x = inferred_genotype, y = true_genotype)) +
+      geom_text(aes(label = n)) +
+      theme_bw() +
+      ggtitle("Maximum a-posteriori genotypes (summary):")
+             
+    
+    # save(
+    #   genos,
+    #   rq,
+    #   genolikes, 
+    #   post_sample,
+    #   pwl,
+    #   genolikes2,
+    #   file = "test_data/vars.rda"
+    # )
+    
+   
+    
+    # get the posterior frequency of the allele plot made
+    post_freq_plot <- pwl$post_freq_plot +
+      geom_histogram(
+        data = post_sample$p,
+        mapping = aes(
+          x = p,
+          y = ..density..
+          ),
+        fill = "blue",
+        alpha = 0.3,
+        binwidth = 0.01
+      ) +
+      ylab("Posterior density / MCMC histogram") + 
+      ggtitle("Allele frequency posterior:")
+
+    # make the top-row trace plot
+    trace <- ggplot(
+      post_sample$p,
+      aes(x = sweep, y = p)
+    ) + 
+      geom_line() +
+      ggtitle("Trace plot of frequency of T allele:")
+    
+
+    
+    # now, add the posteriors to the geno plot. 
+    geno_plot <- pwl$geno_plot +
+      geom_rect(   # get the "bar plots" of the likelihoods
+      data = genolikes4,
+      aes(
+        xmin = xl,
+        xmax = xl + w,
+        ymin = ybot,
+        ymax = ybot + (geno_posterior * full_h),
+      ),
+      fill = NA,
+      colour = "gray",
+      size = 1
+    ) +
+      geom_label(
+        data = genolikes4,
+        aes(
+          x = xpos,
+          y = ybot + full_h,
+          label = inferred_genotype,
+          fill = as.character(inferred_genotype),
+        ),
+        colour = "white",
+        fontface = "bold"
+      )
+    
+    # start mashing up two different columns
+    left_side <- plot_grid(
+      trace, 
+      geno_plot,
+      ncol = 1, 
+      rel_heights = c(0.2, 0.8)
+    )
+    
+    right_side <- plot_grid(
+      max_like_genos_plot,
+      max_post_genos_plot,
+      post_freq_plot,
+      ncol = 1,
+      rel_heights = c(0.3, 0.3, 0.4)
+    )
+    
+     # and, finally, put those all together
+    plot_grid(
+      left_side,
+      right_side,
+      nrow = 1,
+      rel_widths = c(0.65, 0.35)
+    )
+    
+  },
+  height = 750
+)
+```

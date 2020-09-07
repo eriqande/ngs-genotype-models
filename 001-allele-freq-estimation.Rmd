@@ -97,7 +97,8 @@ inputPanel(
   ),
   actionButton(
     "sim_new", 
-    "Simulate new genotypes"
+    "Simulate new genotypes",
+    class = "btn-warning"
   )
 )
 
@@ -164,7 +165,8 @@ renderPlot({
       args = list(
         shape1 = numT + input$alpha_1,
         shape2 = numC + input$alpha_2
-      )
+      ),
+      n = 5000
     ) +
     xlim(0,1) +
     xlab("p_T") +

@@ -2,17 +2,17 @@
 # Function to compute likelihoods for a single indiv
 # and return them in a tibble.  Group on idx and geno to
 # send stuff to this function
-single_indiv_geno_like <- function(seq_err_prob, sampled_allele) {
+single_indiv_geno_like <- function(seq_err_prob, sequenced_allele) {
 
     scaled_likelihood <- numeric(3)
     scaled_likelihood[1] <- prod(
-      (1 - seq_err_prob) * (sampled_allele == "C") +
-        (seq_err_prob * (sampled_allele == "T"))
+      (1 - seq_err_prob) * (sequenced_allele == "C") +
+        (seq_err_prob * (sequenced_allele == "T"))
     )
-    scaled_likelihood[2] <- 0.5 ^ length(sampled_allele)
+    scaled_likelihood[2] <- 0.5 ^ length(sequenced_allele)
     scaled_likelihood[3] <- prod(
-      (1 - seq_err_prob) * (sampled_allele == "T") +
-        (seq_err_prob * (sampled_allele == "C"))
+      (1 - seq_err_prob) * (sequenced_allele == "T") +
+        (seq_err_prob * (sequenced_allele == "C"))
     )
     tibble(
       hyp_geno = c("CC", "CT", "TT"),  # this is the "hypothetical" genotype
@@ -32,7 +32,7 @@ geno_likelihoods <- function(reads_and_quals, genotypes) {
     group_by(idx, geno, ypos, xpos) %>%
     summarise(
       GLs = list(
-        single_indiv_geno_like(seq_err_prob, sampled_allele)
+        single_indiv_geno_like(seq_err_prob, sequenced_allele)
       )
     ) %>%
     unnest(GLs) %>%
