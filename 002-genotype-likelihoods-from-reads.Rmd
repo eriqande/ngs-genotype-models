@@ -253,7 +253,29 @@ renderPlot(
 )
 ```
 
+
+### Some explanation of the plots above:
+
+* **Sample of genotypes**: In this display, there are several rows of individuals.
+Information about each individual appears together under the index of the individual,
+i.e., the 1, 2, 3, ... along the top of each row. The next line down shows the _true_ genotype
+of the individual (i.e. blue CC, or violet CT, or red TT). Below that are two numbers stacked
+vertically that give the number of reads of the C allele (in blue) and of the T allele
+(in red).  Below that, each individual gets a bar plot showing the relative likelihood
+values for the individual's genotype given the read information.  
+
+* The **Posterior Density of p_T** plot to the right: This shows the posterior
+density for the frequency of the T allele calculated directly from the
+genotypes of the individuals (i.e., imagining that we know the genotype of each
+individual, exactly).
+
+
+
 ### Table of reads and quality scores
+
+Here is an easy to view table of the attributes of all of the reads that were simulated
+from the genotypes shown above.  This is the information that goes into
+calculating the likelihood of the genotype of each individual.
 
 ```{r, echo=FALSE}
  DT::renderDataTable(DT::datatable({
@@ -480,3 +502,71 @@ renderPlot(
   height = 750
 )
 ```
+
+### Explanations of all the above plots and things
+
+* **Trace plot**:  This shows the value of the allele frequency at each iteration
+of the Markov chain that is sampling from the joint posterior probability of all the
+variables (genotypes and allele frequencies) given the read data. As such it shows a sample
+from the posterior distribution of of the allele frequency.
+
+* **Sample of genotypes**: This display immediately above is similar to the first
+"sample of genotypes" plot encountered, with a few additions.
+There are several rows of individuals.
+Information about each individual appears together under the index of the individual,
+i.e., the 1, 2, 3, ... along the top of each row. The next line down shows the _true_ genotype
+of the individual (i.e. blue CC, or violet CT, or red TT). Below that are two numbers stacked
+vertically that give the number of reads of the C allele (in blue) and of the T allele
+(in red).
+    - Now, we have a genotype written in white lettering on a colored background
+(like CC on a blue background, CT on a violet background, etc.) _These are the
+genotypes of the individuals that have been **inferred** from the reads,
+taking account of the estimated allele frequency. They are the genotypes
+that have the highest posterior probability._
+    - Below that, as before, each individual gets a bar plot showing the relative likelihood
+values for the individual's genotype given the read information. As before, the colored
+bars show the likelihood of each possible genotype, _but now we have added gray outlines
+on each bar that show the posterior probability of the genotype (taking account
+of the estimated allele frequency)_. It is instructive to compare the posteriors
+to the likelihoods.
+
+* **Maximum likelihood genotypes (summary)** This is a table showing how many true genotypes of 
+different types are inferred to be one of the three different possible genotypes using a
+maximum likelihood criterion (without incorporating the estimated allele frequency).
+
+* **Maximum a-posteriori genotypes (summary)** This is a table showing how many true genotypes of 
+different types are inferred to be one of the three different possible genotypes using a
+maximum posterior criterion (that does incorporate the estimated allele frequency).  You will
+often see that more genotypes are correctly inferred using the _maximum a-posterior_ criterion
+than the maximum likelihood criterion.
+
+* **Allele frequency posterior**:  The black line on this plot gives the posterior distribution of
+the allele frequency when genotypes are known without error and the purple histogram is a sample
+of the posterior distribution (from MCMC) of the allele frequency when genotypes are unknown and are 
+being estimated from the reads.
+
+### Some things to do/think about:
+
+
+1. How does the relationship between the genotype likelihoods and the genotype posteriors
+vary for different true genotypes and patters of read detection, and how does that
+change when the allele frequency changes?
+
+2. How does that relationship change when read depths increase?  For what patterns of read
+counts do the posterior and the likelihood still differ considerably, even with fairly high
+read depths?
+
+3. What happens when read depths get very low? Try them at 1 or 0.5.
+
+4. The "Range of PHRED Quality Scores" slider let's you set the range over which
+reported quality scores are assigned to the reads.  If the "Range of PHRED Quality Departure"
+is small (like between -1 and 1) then the PHRED score accurately reflects the accuracy of
+the base call at a read.
+    - See what happens when you crank down the PHRED score (even with high read depths).
+    (Remember that a PHRED score of 10 implies a 1 in 10 chance of being wrong...).
+    Can you end up being confident about any genotype calls then?
+    - What if the PHRED scores range from 25 to 30, but the departure from PHRED is like -20 to -15?
+    Do you end up with confident calls that are wrong?
+
+
+
