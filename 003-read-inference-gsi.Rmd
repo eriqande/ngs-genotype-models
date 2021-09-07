@@ -1,0 +1,305 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+We propose a simple model for looking at what it really means to do probabilistic
+inference and "propagate uncertainty" by using a simple genetic stock ID model.
+
+Our goal will be to estimate $m$ the fraction of fish from population 1 (as opposed to
+population 2) using reads obtained from $N$ individuals (in a mixture) at $L$ loci.  We will assume
+that the allele frequencies in the two populations, vector $p_1$ and $p_2$, respectively,
+are known without error.  But that we do not know, ahead of time, which population each
+individual comes from. 
+
+The SNP allele frequencies in population 1, $p_1$, are drawn from a Beta(1.5,1.5) distribution,
+and then the frequencies in population 2, $p_2$, are drawn using the Nicholson model with $F_\mathrm{ST} = f$.
+This model is the same as used for the correlated allele frequencies model in the program
+`structure`.  Basically we have:
+$$
+p_2 \sim \mathrm{Beta}\biggl( 
+\frac{1-f}{f}p_1,
+\frac{1-f}{f}(1 - p_1),
+\biggr)
+$$
+Below you will be able to enter values for the parameters:
+
+- $m$: the fraction of individuals in the mixture from population 1.
+- $N$: the size of the sample from the mixture.
+- $L$: the number of SNP loci available.
+- $f$: the degree of differentiation (like $F_\mathrm{ST}$) you wish to have between the populations
+- $R$: the average read depth per site from an individual.
+
+When you are starting out, you might as well use the default values, and then you can
+start playing around with things further.
+When values you want are in the input fields, you proceed by hitting the
+big orange, **Run The Simulation** button.   First, this will simulate allele frequencies for the two
+populations. These are presented in a scatter plot.  Subsequently the genotypes (as well as reads) from a
+sample of individuals from the
+mixture are simulated, and then the program proceeds to calculate the posterior distribution for
+the mixing proportion, $m$, as well as the
+posterior probabilities of group membership for each individual, and it displays these values
+in a few plots.  
+
+The posterior distribution of the mixing proportion and the posterior probabilities of group
+membership are computed using three different methods, as follows:
+
+1. `from_the_actual_genotypes`: For these estimates, the program uses the _true genotypes_ of the individuals.
+This is as good as you could possibly do---you effectively know the genotypes of all indivdiuals with no error
+or uncertainty. So, this is close to "the truth," but you typically will not achieve this with
+low coverage sequencing.
+
+2. `from_genotype_likelihoods`: In this case each individual has a randomly distributed number of reads at
+each locus (these are independently Poisson-distributed numbers with an average value of $R$, and
+we assume no sequencing error), and from these
+reads, the genotype likelihood is calculated, and then _the likelihoods themselves_ are used in downstream
+analyses.  This is what is often called  "_propagating the uncertainty_" to the downstream analyses.  Thus, rather
+than having to call genotypes (for example, "It's an AA at this locus!") we use the likelihoods to express
+the degree of information we have that the true genotype is one of the three possible values (for example,
+"The likelihood is 0.666 that it is an AA, 0.333 that it is and AC, and 0.0 that it is a CC).  (Note, with low
+read depths, this is the way things should be done!).
+
+3. `from_max_likelihood_assigned_genotypes`: In this case, we have been forced to call genotypes using the
+genotype likelihoods.  And we have done so by choosing the genotype with the highest likelihood. (Since we
+don't know which population each individual comes from, we can't use the genotype posterior, because we don't
+know the allele frequency to use as a prior).  This is what one typically does _not_ want to do, but many programs
+(like GATK) will, by default, return this type of maximum-liklihood genotype call, even if you only have one
+read at the site in an individual!
+
+The default values are set for a case where the `from_max_likelihood_assigned_genotypes` does particularly
+poorly: the posterior distribution of $m$ is not too wide (so you think you have an accurate good estimate), but
+typically does not overlap the true value!
+
+
+3. `from_max_likelihood_assigned_genotypes`
+
+First, we set up the populations:
+```{r, message=FALSE}
+library(tidyverse)
+N <- 500
+L <- 100
+f <- 0.1
+
+p1 <- rbeta(L, 1.5, 1.5)
+p2 <- rbeta(L, p1 * (1 - f) / f, (1 - p1) * (1 - f) / f)
+```
+
+Here is a scatterplot of those allele freqs:
+```{r}
+tibble(p1 = p1, p2 = p2) %>%
+  ggplot(aes(x = p1, y = p2)) + 
+  geom_point(col = "blue") + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted")
+```
+
+Now, from those allele frequencies, we can calculate the expected genotype frequencies
+and we will put them in a matrix with loci in columns and genotypes in rows. The first
+row is homozygous for the "focal" allele (whatever is used in the allele frequency), the
+second is heterozygous, and the third is homozygous for the other allele.
+```{r}
+GP1 <- matrix(
+  c(p1 ^ 2, 2 * p1 * (1 - p1), (1 - p1) ^ 2),
+  byrow = TRUE,
+  nrow = 3
+)
+GP2 <- matrix(
+  c(p2 ^ 2, 2 * p2 * (1 - p2), (1 - p2) ^ 2),
+  byrow = TRUE,
+  nrow = 3
+)
+
+```
+
+For fun, let's plot the genotype freqs:
+```{r}
+tibble(
+  GP1 = as.vector(GP1),
+  GP2 = as.vector(GP2)
+) %>%
+  ggplot(aes(x = GP1, y = GP2)) +
+  geom_point(col = "blue") + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted")
+
+```
+That is actually not terribly informative.
+
+Now we want to simulate some genotypes for $N$ individuals.  We will
+express these genotypes as matrices too, with a single 1 and two 0's in each
+column.  But we need a mixing proportion here too so we can define pops they
+come from:
+```{r}
+# store the GPs in a subscriptable fashion
+GP <- list(GP1, GP2)
+
+# mix: proportion of pop 1 in mixture
+mix <- 0.9
+
+Z <- sample(1:2, size = N, replace = TRUE, prob = c(mix, 1 - mix))
+
+# genotype matrices
+GM <- lapply(1:N, function(i) {
+  gp <- GP[[Z[i]]]
+  apply(gp, 2, function(x) rmultinom(1, 1, x))
+})
+
+# now, make a tibble of these, and calculate the nomrmalized
+# logls for coming from each pop
+
+# we want a function that does this for any genotype matrix input,
+# as we will use the genotype likelihoods or posteriors instead,
+# as well.
+ret_lik <- function(x, which = 1) {
+  logl1 <- sum(log(colSums(x * GP[[1]])))
+  logl2 <- sum(log(colSums(x * GP[[2]])))
+  lmax <- pmax(logl1, logl2)
+  lik1 <- exp(logl1 - lmax) / (exp(logl1 - lmax) + exp(logl2 - lmax))
+  lik2 <- exp(logl2 - lmax) / (exp(logl1 - lmax) + exp(logl2 - lmax))
+  if(which == 1) {
+    return(lik1)
+  }
+  if(which == 2) {
+    return(lik2)
+  }
+  else {stop("which must be one or two")}
+}
+
+
+samples <- tibble(
+  idx = 1:N,
+  Z = Z,
+  GM = GM
+) %>%
+  mutate(
+    lik1 = map_dbl(.x = GM, ret_lik, which = 1),
+    lik2 = map_dbl(.x = GM, ret_lik, which = 2)
+  )
+```
+
+Now, from those likelihoods we could easily compute a posterior for the mixing
+proportion like this (we assume a uniform prior for it):
+```{r}
+# define a function for getting the posterior for the mixing
+# proportion from the L1 and L2, which are the likelihoods that you want to use.
+mix_post_func <- function(L1, L2, pts = seq(0.01, 0.99, by = 0.005)) {
+  mixes <- pts
+  mix_post <- unlist(lapply(mixes, function(m) {
+    sum(log(m * L1 + (1 - m) * L2))
+  }))
+  mix_post <- exp(mix_post - max(mix_post))
+  mix_post
+}
+```
+
+OK, that seems perfectly legit.
+
+## Now, what if we only have reads from these dudes
+
+Now, let's simulate reads (and likelihoods for each of these individuals).
+We are going to make it totally simple: each individual gets a Poisson number
+of reads, and we assume no genotyping error so, the likelihoods are easy to compute.
+In fact, lets make a function for that
+```{r}
+#' @param R a two vector: number of reads of allele 1 and number of allele 2.
+#' @return A three vector: the likelihood that the true genotype is 11, 12, 22 where 1 
+#' is the allele for which the allele frequency is given.
+glike_mix <- function(R) {
+  n <- sum(R)
+  l11 <- dbinom(R[1], n, prob = 1)
+  l12 <- dbinom(R[1], n, prob = 0.5)
+  l22 <- dbinom(R[1], n, prob = 0)
+  
+  c(l11, l12, l22) / (l11 + l12 + l22)
+}
+```
+
+And, with that, we should be able to compute these likelihoods for each individual
+```{r}
+AveRD <- 0.1 # get the average read depth
+
+# here is a function to look at a genotype columns (a three vector with one 1 in it),
+# and then return simulate reads from that in a two vector, and then calculate the
+# genotype likeihood of that with glike_mix.
+sim_reads_etc <- function(x, R = AveRD) {
+  RD = rpois(1, R)
+  if(x[1] == 1) {
+    gr <- c(RD, 0)
+  } else if(x[3] == 1) {
+    gr <- c(0, RD)
+  } else {
+    y <- rbinom(1, RD, 0.5)
+    gr <- c(y, RD - y)
+  }
+  glike_mix(gr)
+}
+
+# here is another function to return a three-vector with a 1 at the maximum
+# likelihood position (or a 0 if it is all missing)
+max_geno_from_likes <- function(x) {
+  ret <- c(0, 0, 0)
+  if(x[1] == x[2] & x[2] == x[3]) {
+    return(x)  # in this case, we say that any genotype is equally likely.  This will work out this way
+  }
+  z <- which.max(x)
+  ret[z] <- 1
+  ret
+}
+
+samp2 <- samples %>%
+  mutate(
+    read_likes = map(
+      .x = GM,
+      .f = function(x) apply(x, 2, sim_reads_etc)
+    ),
+    # while we are at it, let's just assign the maximum likelihood genotype,
+    # and also the genotype posteriors given that they are from each of the
+    # the two populations in turn
+    max_like_geno = map(
+      .x = read_likes,
+      .f = function(x) apply(x, 2, max_geno_from_likes)
+    ),
+    gpost_1 = map(
+      .x = read_likes,
+      .f = function(x) apply(x * GP[[1]], 2, function(z) {z / sum(z)})
+    ),
+    gpost_2 = map(
+      .x = read_likes,
+      .f = function(x) apply(x * GP[[2]], 2, function(z) {z / sum(z)})
+    )
+  )
+
+```
+
+Now, with those, we can do a few different things.  
+
+## Calculate likelihoods via different methods
+
+```{r}
+samp3 <- samp2 %>%
+  mutate(
+    like1_from_max_like_geno = map_dbl(.x = max_like_geno, ret_lik, which = 1),
+    like2_from_max_like_geno = map_dbl(.x = max_like_geno, ret_lik, which = 2),
+    like1_from_read_likes = map_dbl(.x = read_likes, ret_lik, which = 1),
+    like2_from_read_likes = map_dbl(.x = read_likes, ret_lik, which = 2)
+  )
+```
+
+Compute the posterior for the mixing proportions:
+```{r}
+pts <- seq(0, 1, by = 0.005)
+mix_posts <- tibble(
+  mix_prop = pts,
+  from_actual_geno = mix_post_func(samp3$lik1, samp3$lik2, pts),
+  from_ml_geno = mix_post_func(samp3$like1_from_max_like_geno, samp3$like2_from_max_like_geno, pts),
+  from_geno_likes = mix_post_func(samp3$like1_from_read_likes, samp3$like2_from_read_likes, pts)
+)
+```
+
+Then, let us plot those:
+
+```{r}
+mix_posts %>%
+  pivot_longer(cols = starts_with("from"), values_to = "posterior", names_to = "method") %>%
+  ggplot(aes(x = mix_prop, y = posterior, colour = method)) + 
+  geom_line() +
+  geom_vline(xintercept = mix, linetype = "dashed")
+```
