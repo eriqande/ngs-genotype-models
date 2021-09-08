@@ -72,7 +72,7 @@ $$
 p_T \sim \mathrm{Beta}(\alpha_T + \#T, \alpha_C + \#C)
 $$
 
-Set $p_T$ and $n$ (the diploid sample size) and hit `Simulate new genotypes` to
+Set $p_T$ and $N$ (the diploid sample size) and hit `Simulate new genotypes` to
 simulate a new sample.  The posterior distribution will be computed for each new
 sample. (The true value of $p_T$ is at the red vertical line).
 
@@ -89,7 +89,7 @@ inputPanel(
   ),
   numericInput(
     "n", 
-    label = "n",
+    label = "N",
     min = 1, 
     max = 200, 
     value = 20,
@@ -183,12 +183,18 @@ renderPlot({
 ```
 
 
-### Some things to try:
+### This is what the DAG looks like for this model
+
+```{r, echo=FALSE, out.width='30%'}
+knitr::include_graphics("diagrams/dag_for_hands_on_001.svg")
+```
+
+
+### Some things to do/think about:
 
 1. Vary the true frequency.
 2. Vary the sample size.
 3. See what happens if the true frequency is 0 or 1, and then start fiddling with the prior.
-
-How does the influence of the prior compare when the true allele frequency is intermediate
+4. How does the influence of the prior compare when the true allele frequency is intermediate
 versus when the true frequency is near 0 or 1?
 
