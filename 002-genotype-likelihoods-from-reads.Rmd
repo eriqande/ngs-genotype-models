@@ -545,6 +545,12 @@ the allele frequency when genotypes are known without error and the purple histo
 of the posterior distribution (from MCMC) of the allele frequency when genotypes are unknown and are 
 being estimated from the reads.
 
+### This is what the DAG looks like for this model
+
+```{r, echo=FALSE, out.width='100%'}
+knitr::include_graphics("diagrams/dag_for_hands_on_002-fonts-outlined.svg")
+```
+
 ### Some things to do/think about:
 
 

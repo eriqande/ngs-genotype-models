@@ -191,7 +191,7 @@ simulate_data_and_inferences <- function(
     ggplot(aes(x = mix_prop, y = posterior, colour = method)) +
     geom_line(size = 1.0) +
     geom_vline(xintercept = mix, linetype = "dashed") +
-    ggtitle("Mixing Proportion Posteriors from Three Methods")
+    ggtitle("Mixing Proportion Posteriors from Three Methods (True Value at Dashed Vertical Line)")
 
 
   # Finally, calculate the posterior probs of origin for each fish
@@ -235,7 +235,8 @@ simulate_data_and_inferences <- function(
       ) %>%
     ggplot(aes(x = Pop1_posterior_prob, fill = true_population_of_origin)) +
     geom_histogram(bins = 30) +
-    facet_grid(true_population_of_origin ~ method, scales = "free_y")
+    facet_grid(true_population_of_origin ~ method, scales = "free_y") +
+    ggtitle("Posterior probabilities of membership from Population 1")
 
 
   # finally, return some plots
