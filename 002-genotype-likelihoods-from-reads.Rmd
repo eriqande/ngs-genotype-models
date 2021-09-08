@@ -8,7 +8,10 @@ runtime: shiny
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(cowplot)
-dump <- lapply(dir("R", pattern = "*.R", full.names = TRUE), function(f) source(f))
+source("R/compute_posteriors_mcmc.R")
+source("R/geno_likelihoods.R")
+source("R/plot_with_likelihoods.R")
+
 ```
 
 In the brave new world of next generation sequencing, we may not be able to
